@@ -5,6 +5,7 @@
 //  Created by lhl on 2026/3/2.
 //
 
+import SwiftData
 import SwiftUI
 
 @main
@@ -13,5 +14,6 @@ struct ClassRegisterApp: App {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(for: [PhotoRecord.self])
     }
 }
