@@ -1,72 +1,92 @@
 import Foundation
+import ImageIO
 import UIKit
 
 final class PhotoFileStore {
     static let shared = PhotoFileStore()
 
-    private let fileManager = FileManager.default
-    private let imageCache = NSCache<NSString, UIImage>()
-    private let folderName = "ClassRegisterPhotos"
+    private let fileManager: FileManager
+    private let baseDirectoryName = "ClassRegisterPhotos"
 
-    private init() {}
-
-    private var baseURL: URL {
-        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            fatalError("Application Support directory not found.")
-        }
-
-        let folderURL = appSupport.appendingPathComponent(folderName, isDirectory: true)
-        if !fileManager.fileExists(atPath: folderURL.path) {
-            try? fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
-        }
-        return folderURL
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
     }
 
-    func fileURL(for fileName: String) -> URL {
-        baseURL.appendingPathComponent(fileName)
-    }
-
-    func saveImage(_ image: UIImage) throws -> String {
+    func saveJPEG(_ image: UIImage) throws -> String {
         guard let data = image.jpegData(compressionQuality: 0.9) else {
-            throw PhotoFileError.encodingFailed
+            throw AppError.imageEncodeFailed
         }
 
         let fileName = "\(UUID().uuidString).jpg"
-        let fileURL = fileURL(for: fileName)
-        try data.write(to: fileURL, options: [.atomic])
-        imageCache.setObject(image, forKey: fileName as NSString)
+        let url = try fileURL(for: fileName)
+
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            throw AppError.fileWriteFailed
+        }
+
         return fileName
     }
 
     func loadImage(fileName: String) -> UIImage? {
-        if let cached = imageCache.object(forKey: fileName as NSString) {
-            return cached
-        }
+        guard let url = try? fileURL(for: fileName) else { return nil }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return UIImage(data: data)
+    }
 
-        let fileURL = fileURL(for: fileName)
-        guard fileManager.fileExists(atPath: fileURL.path),
-              let image = UIImage(contentsOfFile: fileURL.path) else {
+    func loadThumbnail(fileName: String, maxPixelSize: Int = 320) -> UIImage? {
+        guard let url = try? fileURL(for: fileName) else { return nil }
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
             return nil
         }
-        imageCache.setObject(image, forKey: fileName as NSString)
-        return image
+
+        return UIImage(cgImage: cgImage)
     }
 
     func deleteImage(fileName: String) throws {
-        let fileURL = fileURL(for: fileName)
-        imageCache.removeObject(forKey: fileName as NSString)
-        guard fileManager.fileExists(atPath: fileURL.path) else { return }
-        try fileManager.removeItem(at: fileURL)
-    }
-}
-
-enum PhotoFileError: LocalizedError {
-    case encodingFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .encodingFailed:
-            return "图片编码失败，无法写入本地存储。"
+        let url = try fileURL(for: fileName)
+        if !fileManager.fileExists(atPath: url.path) {
+            throw AppError.fileMissing
         }
+
+        do {
+            try fileManager.removeItem(at: url)
+        } catch {
+            throw AppError.fileDeleteFailed
+        }
+    }
+
+    func imageURL(fileName: String) throws -> URL {
+        try fileURL(for: fileName)
+    }
+
+    private func fileURL(for fileName: String) throws -> URL {
+        try ensureBaseDirectory()
+        return applicationSupportDirectory().appendingPathComponent(baseDirectoryName, isDirectory: true)
+            .appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    private func ensureBaseDirectory() throws {
+        let directory = applicationSupportDirectory().appendingPathComponent(baseDirectoryName, isDirectory: true)
+        if fileManager.fileExists(atPath: directory.path) { return }
+
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw AppError.fileWriteFailed
+        }
+    }
+
+    private func applicationSupportDirectory() -> URL {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     }
 }
